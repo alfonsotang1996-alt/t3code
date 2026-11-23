@@ -3413,6 +3413,28 @@ export default function ChatView(props: ChatViewProps) {
     return embedded ? null : <NoActiveThreadState />;
   }
 
+  const hudModelSelection =
+    (composerModelSelectionApplies ? composerSelectedModelSelection : null) ??
+    activeThread.modelSelection;
+  const hudModels = selectedProviderEntry?.models ?? EMPTY_PROVIDER_MODELS;
+  const hudModelSlug = selectedProviderEntry
+    ? resolveSelectableModel(selectedProviderEntry.driverKind, hudModelSelection.model, hudModels)
+    : null;
+  const hudCatalogModel = hudModelSlug
+    ? hudModels.find((model) => model.slug === hudModelSlug)
+    : undefined;
+  const hudModelLabel =
+    hudModelSelection.model.trim() === ""
+      ? null
+      : hudCatalogModel
+        ? getTriggerDisplayModelName(hudCatalogModel, selectedProviderEntry?.driverKind)
+        : formatModelSlugName(hudModelSelection.model);
+  const hudEffortLabel = formatModelSelectionEffort(
+    hudModelSelection,
+    hudModels,
+    reportedModelSelection,
+  );
+
   const rightPanelContent = activeThreadRef ? (
     <RightPanelSurfaceContent
       surface={renderedRightPanelSurface}
@@ -4160,6 +4182,15 @@ export default function ChatView(props: ChatViewProps) {
                     providers: providerStatuses,
                     sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
                     contextWindow: activeContextWindow,
+                  }}
+                  hud={{
+                    modelLabel: hudModelLabel,
+                    effortLabel: hudEffortLabel,
+                    runtimeMode,
+                    isWorking,
+                    activeProviderThreadId: activeProviderThread?.id ?? null,
+                    providerTurns: serverProjection?.providerTurns,
+                    subagents: serverProjection?.subagents,
                   }}
                 />
 

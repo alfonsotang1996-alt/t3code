@@ -26,6 +26,7 @@ export function ThreadDetailsCard({
   handle,
   contentKey,
   onContextMenu,
+  secondaryCard,
   children,
 }: {
   threadRef: ScopedThreadRef;
@@ -34,6 +35,7 @@ export function ThreadDetailsCard({
   /** Changes when the set of rendered items changes, so cached heights are measured again. */
   contentKey: string;
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
+  secondaryCard?: ReactNode;
   children: (density: "full" | "compact" | "essential") => ReactNode;
 }) {
   const gt = useGT();
@@ -118,10 +120,12 @@ export function ThreadDetailsCard({
     <div
       className={cn(
         "dropdown-glass isolate contain-paint grid max-h-full grid-rows-[minmax(0,1fr)] overflow-hidden rounded-2xl",
+        secondaryCard && "min-h-0 flex-initial",
         mode === "popover" &&
+          !secondaryCard &&
           "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))]",
       )}
-      style={placement ? { maxHeight: height } : undefined}
+      style={placement && !secondaryCard ? { maxHeight: height } : undefined}
       onContextMenu={onContextMenu}
       data-thread-details-card
     >
@@ -154,7 +158,7 @@ export function ThreadDetailsCard({
           data-workspace-focus-key={`details:${threadRef.environmentId}:${threadRef.threadId}`}
           // Skip the return transition to avoid overlapping the rising preview.
           className={cn(
-            "absolute z-20",
+            "absolute z-20 flex flex-col gap-3",
             topInset > 0 && "transition-[top] duration-150 ease-out motion-reduce:transition-none",
           )}
           style={{
@@ -167,6 +171,7 @@ export function ThreadDetailsCard({
           data-thread-details-panel="inline"
         >
           {card}
+          {secondaryCard ? <div className="shrink-0">{secondaryCard}</div> : null}
         </aside>
       ) : null}
       {/* Rendered in both modes: base-ui keeps a popup that unmounts mid-open
@@ -191,8 +196,16 @@ export function ThreadDetailsCard({
         padding="none"
       >
         {mode === "popover" ? (
-          <div data-density={density} data-thread-details-panel="popover">
+          <div
+            data-density={density}
+            data-thread-details-panel="popover"
+            className={cn(
+              secondaryCard &&
+                "flex max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))] flex-col gap-2",
+            )}
+          >
             {card}
+            {secondaryCard ? <div className="shrink-0">{secondaryCard}</div> : null}
           </div>
         ) : null}
       </PopoverPopup>
