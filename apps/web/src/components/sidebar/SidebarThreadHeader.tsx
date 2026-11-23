@@ -29,6 +29,7 @@ export interface SidebarThreadHeaderProps {
   searchResultCount: number;
   activeSearchResultIndex: number;
   onClearSearch: () => void;
+  extraActions?: ReactNode;
 }
 
 export function SidebarThreadHeader({
@@ -47,6 +48,7 @@ export function SidebarThreadHeader({
   searchResultCount,
   activeSearchResultIndex,
   onClearSearch,
+  extraActions,
 }: SidebarThreadHeaderProps) {
   const gt = useGT();
   const resultsVisible = isSearching && searchResultCount > 0;
@@ -98,6 +100,7 @@ export function SidebarThreadHeader({
       </div>
       <div className="flex shrink-0 items-center">
         {hasProjects ? projectScope : null}
+        {extraActions}
         <SidebarHeaderIconButton
           label={gt("New thread")}
           tooltip={
