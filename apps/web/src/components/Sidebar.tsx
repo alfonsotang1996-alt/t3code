@@ -259,6 +259,22 @@ import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
+import { useCustomGroupsStore } from "./custom/customGroupsStore";
+import {
+  appendCustomGroupThreadMenuItems,
+  isCustomGroupThreadMenuActionId,
+  resolveGroupNewThreadProjectRef,
+} from "./custom/SidebarCustomGroups.logic";
+import {
+  SidebarCustomGroupHeaderButton,
+  SidebarCustomGroupsHost,
+  SidebarCustomGroupsSection,
+  commitCustomGroupDrop,
+  endCustomGroupDrag,
+  handleCustomGroupThreadMenuSelection,
+  updateCustomGroupDrag,
+  useSidebarCustomGroups,
+} from "./custom/SidebarCustomGroups";
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -1322,7 +1338,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     draggableThreadKeys,
     activeReorderableThreadKeys,
     activeThreads,
-    workingThreads,
+    workingThreads: rawWorkingThreads,
     snoozedThreads,
     settledThreads,
     snoozeNow,
@@ -1338,12 +1354,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleSnoozedShelf,
     workingShelfExpanded,
     toggleWorkingShelf,
-    projectFolders,
+    projectFolders: rawProjectFolders,
     toggleProjectFolder,
     renderedSettledThreads,
     visibleSnoozedThreads,
-    visibleWorkingThreads,
-    orderedThreadKeys,
+    orderedThreadKeys: rawOrderedThreadKeys,
     threadByKey,
     settledThreadKeys,
     snoozedThreadKeys,
@@ -1370,6 +1385,25 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : null,
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
+  });
+
+  const {
+    hasCustomGroups,
+    customGroupPartition,
+    workingThreads,
+    visibleWorkingThreads,
+    projectFolders,
+    orderedThreadKeys,
+  } = useSidebarCustomGroups({
+    activeThreads,
+    rawWorkingThreads,
+    workingShelfExpanded,
+    routeRowThreadKey,
+    rawProjectFolders,
+    rawOrderedThreadKeys,
+    pinnedThreads,
+    visibleSnoozedThreads,
+    renderedSettledThreads,
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -1772,6 +1806,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     contextDragKeyRef.current = null;
     dragScrollRef.current = null;
     endThreadContextDrag();
+    endCustomGroupDrag();
     if (started) {
       listMotionRef.current?.release();
       setDragState(null);
@@ -1804,16 +1839,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (scroll && scroll.viewport.scrollTop !== scroll.top) scroll.viewport.scrollTop = scroll.top;
   };
   const moveThreadContextDrag = (point: { x: number; y: number }) => {
+    const customGroupDropTarget = updateCustomGroupDrag(point, {
+      activeThreadKey: contextDragKeyRef.current,
+      sectionByThreadKey: sectionByThreadKeyRef.current,
+    });
     // Search results cannot reorder, so their context preview starts inside the list.
     const contextDrag = searchResultsListRef.current !== null || pointerOutsideThreadList(point);
-    setDragState((current) =>
-      current === null || current.contextDrag === contextDrag
-        ? current
-        : { ...current, contextDrag },
-    );
+    setDragState((current) => {
+      if (current === null) return current;
+      const nextTargetSection = customGroupDropTarget !== null ? null : current.targetSection;
+      if (current.contextDrag === contextDrag && current.targetSection === nextTargetSection) {
+        return current;
+      }
+      return { ...current, contextDrag, targetSection: nextTargetSection };
+    });
     if (!contextDrag) {
       endThreadContextDrag();
-      return false;
+      return customGroupDropTarget !== null;
     }
     restoreDragScroll();
     const threads = contextDragThreads();
@@ -1823,6 +1865,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     return true;
   };
   const dropThreadContextDrag = (point: { x: number; y: number }) => {
+    const dragThreadKeys = contextDragThreads().map((ref) => scopedThreadKey(ref));
+    if (
+      commitCustomGroupDrop(point, dragThreadKeys, {
+        activeThreadKey: contextDragKeyRef.current,
+        sectionByThreadKey: sectionByThreadKeyRef.current,
+      })
+    ) {
+      restoreDragScroll();
+      return true;
+    }
     if (!pointerOutsideThreadList(point)) return false;
     restoreDragScroll();
     dropThreadContext(point, contextDragThreads());
@@ -1985,6 +2037,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
     if (
       !hasProjectFolders &&
+      !hasCustomGroups &&
       pinnedThreads.length +
         activeThreads.length +
         workingThreads.length +
@@ -1998,8 +2051,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
+    const groupedVisibleRows = hasCustomGroups
+      ? rowsOf(
+          customGroupPartition.groupedSections.flatMap((section) => section.visibleThreads),
+          "active",
+        )
+      : [];
+    const activeRows = rowsOf(
+      hasCustomGroups ? customGroupPartition.ungroupedActiveThreads : activeThreads,
+      "active",
+    );
     items.push({ kind: "marker", marker: "active-placeholder" });
+    items.push(...groupedVisibleRows);
     items.push(...activeRows);
     if (workingThreads.length > 0) {
       items.push({ kind: "marker", marker: "working-header" });
@@ -2043,6 +2106,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectFolders
       ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
       .join("\n") ?? "",
+    customGroupPartition.groupedSections
+      .map(
+        (section) =>
+          `${section.group.id}:${section.group.collapsed}:${section.visibleThreads.length}`,
+      )
+      .join("\n"),
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
   ].join("\0");
@@ -2378,63 +2447,75 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         timestampFormat,
         selectedThreads[0]!.environmentId,
       );
+      const { groups: currentGroups, threadGroupByKey: currentThreadGroupByKey } =
+        useCustomGroupsStore.getState();
+      const groupIds = new Set(threadKeys.map((key) => currentThreadGroupByKey[key] ?? null));
+      const currentGroupId = groupIds.size === 1 ? ([...groupIds][0] ?? null) : null;
+      const hasAnyAssigned = threadKeys.some((key) => Boolean(currentThreadGroupByKey[key]));
+      const multiSelectItems = appendCustomGroupThreadMenuItems(
+        [
+          ...(unpinMenuItem
+            ? [{ ...unpinMenuItem, disabled: !canOperateThreads(pinnedSelectedThreads) }]
+            : []),
+          {
+            id: "settle",
+            label: gt("Settle ({count})", { count }),
+            disabled: settlingThreads.length === 0 || !canOperateThreads(settlingThreads),
+          },
+          ...(canSnoozeSelection
+            ? [
+                {
+                  id: "snooze",
+                  label: gt("Snooze ({count})", { count }),
+                  disabled: !canOperateThreads(selectedThreads),
+                  children: [
+                    ...snoozePresets.map((preset) => ({
+                      id: `snooze:${preset.id}`,
+                      label: preset.label,
+                      detail: preset.whenLabel,
+                      disabled: !canOperateThreads(selectedThreads),
+                    })),
+                    {
+                      id: "snooze:custom",
+                      label: gt("Custom…"),
+                      separatorBefore: snoozePresets.length > 0,
+                      disabled: !canOperateThreads(selectedThreads),
+                    },
+                  ],
+                },
+              ]
+            : []),
+          ...(titleRegenerationMenuItem
+            ? [
+                {
+                  ...titleRegenerationMenuItem,
+                  disabled:
+                    titleRegenerationMenuItem.disabled ||
+                    !canOperateThreads(regeneratableTitleThreads),
+                },
+              ]
+            : []),
+          { id: "mark-unread", label: gt("Mark unread ({count})", { count }) },
+          {
+            id: "delete",
+            label: gt("Delete ({count})", { count }),
+            destructive: true,
+            disabled: !canOperateThreads(selectedThreads),
+          },
+        ],
+        {
+          groups: currentGroups,
+          currentGroupId,
+          hasAnyAssigned,
+          count,
+        },
+        m,
+      );
       const clicked = await settlePromise(() =>
-        api.contextMenu.show(
-          [
-            ...(unpinMenuItem
-              ? [{ ...unpinMenuItem, disabled: !canOperateThreads(pinnedSelectedThreads) }]
-              : []),
-            {
-              id: "settle",
-              label: gt("Settle ({count})", { count }),
-              disabled: settlingThreads.length === 0 || !canOperateThreads(settlingThreads),
-            },
-            ...(canSnoozeSelection
-              ? [
-                  {
-                    id: "snooze",
-                    label: gt("Snooze ({count})", { count }),
-                    disabled: !canOperateThreads(selectedThreads),
-                    children: [
-                      ...snoozePresets.map((preset) => ({
-                        id: `snooze:${preset.id}`,
-                        label: preset.label,
-                        detail: preset.whenLabel,
-                        disabled: !canOperateThreads(selectedThreads),
-                      })),
-                      {
-                        id: "snooze:custom",
-                        label: gt("Custom…"),
-                        separatorBefore: snoozePresets.length > 0,
-                        disabled: !canOperateThreads(selectedThreads),
-                      },
-                    ],
-                  },
-                ]
-              : []),
-            ...(titleRegenerationMenuItem
-              ? [
-                  {
-                    ...titleRegenerationMenuItem,
-                    disabled:
-                      titleRegenerationMenuItem.disabled ||
-                      !canOperateThreads(regeneratableTitleThreads),
-                  },
-                ]
-              : []),
-            { id: "mark-unread", label: gt("Mark unread ({count})", { count }) },
-            {
-              id: "delete",
-              label: gt("Delete ({count})", { count }),
-              destructive: true,
-              disabled: !canOperateThreads(selectedThreads),
-            },
-          ],
-          position,
-          source,
-        ),
+        api.contextMenu.show(multiSelectItems, position, source),
       );
       if (clicked._tag === "Failure" || clicked.value === null) return;
+      if (handleCustomGroupThreadMenuSelection(clicked.value, threadKeys)) return;
       const actionTargets =
         clicked.value === "unpin"
           ? pinnedSelectedThreads
@@ -2691,49 +2772,57 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 projectRef.projectId === thread.projectId,
             ),
           ) ?? null;
+        const { groups: currentGroups, threadGroupByKey: currentThreadGroupByKey } =
+          useCustomGroupsStore.getState();
+        const threadMenuItems = appendCustomGroupThreadMenuItems(
+          buildThreadActionMenuItems({
+            canOperate: readEnvironmentScope(
+              threadRef.environmentId,
+              AuthOrchestrationOperateScope,
+            ),
+            branch: thread.branch ?? null,
+            // An archived project is not a filter choice.
+            projectFilter:
+              threadProjectGroup && !threadProjectGroup.archived
+                ? {
+                    label: threadProjectGroup.displayName,
+                    isActive: projectScopeKeys.includes(threadProjectGroup.projectKey),
+                  }
+                : null,
+            isPinned,
+            isSettled,
+            autoSettleEnabled: thread.autoSettleDisabledAt == null,
+            isSnoozed,
+            canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+            isRegeneratingTitle,
+            isRunning: !threadRuntimeCanArchive(thread.runtime),
+            hasCompletedRun: thread.latestRun?.completedAt != null,
+            canShareWithGuest: appAtomRegistry.get(canShareWithGuestAtom(threadRef.environmentId)),
+            canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+            canRename: !fromSearch,
+            supports: {
+              settlement: configLoaded,
+              autoSettleOptOut: supportsAutoSettleOptOut,
+              snooze: configLoaded,
+              pinning: configLoaded,
+              titleRegeneration: configLoaded,
+            },
+            snoozePresets,
+          }),
+          {
+            groups: currentGroups,
+            currentGroupId: currentThreadGroupByKey[threadKey] ?? null,
+          },
+          m,
+        );
         const clicked = await settlePromise(() =>
-          api.contextMenu.show(
-            buildThreadActionMenuItems({
-              canOperate: readEnvironmentScope(
-                threadRef.environmentId,
-                AuthOrchestrationOperateScope,
-              ),
-              branch: thread.branch ?? null,
-              // An archived project is not a filter choice.
-              projectFilter:
-                threadProjectGroup && !threadProjectGroup.archived
-                  ? {
-                      label: threadProjectGroup.displayName,
-                      isActive: projectScopeKeys.includes(threadProjectGroup.projectKey),
-                    }
-                  : null,
-              isPinned,
-              isSettled,
-              autoSettleEnabled: thread.autoSettleDisabledAt == null,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning: !threadRuntimeCanArchive(thread.runtime),
-              hasCompletedRun: thread.latestRun?.completedAt != null,
-              canShareWithGuest: appAtomRegistry.get(
-                canShareWithGuestAtom(threadRef.environmentId),
-              ),
-              canTurnIntoProject: canTurnThreadIntoProject(threadRef),
-              canRename: !fromSearch,
-              supports: {
-                settlement: configLoaded,
-                autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: configLoaded,
-                pinning: configLoaded,
-                titleRegeneration: configLoaded,
-              },
-              snoozePresets,
-            }),
-            position,
-            source,
-          ),
+          api.contextMenu.show(threadMenuItems, position, source),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
+        if (isCustomGroupThreadMenuActionId(clicked.value)) {
+          handleCustomGroupThreadMenuSelection(clicked.value, [threadKey]);
+          return;
+        }
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
@@ -3010,6 +3099,39 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         }),
       )
     : null;
+
+  const handleNewThreadInCustomGroup = async (groupId: string) => {
+    const projectRef = resolveGroupNewThreadProjectRef({
+      groupId,
+      threads: listedThreads,
+      threadGroupByKey: useCustomGroupsStore.getState().threadGroupByKey,
+      projects,
+      scopedProjectGroups,
+      contextFallback: {
+        activeDraftThread: newThreadContext.activeDraftThread,
+        activeThread: newThreadContext.activeThread ?? undefined,
+        defaultProjectRef: newThreadContext.defaultProjectRef,
+        handleNewThread,
+      },
+    });
+    useCustomGroupsStore.getState().setGroupCollapsed(groupId, false);
+    if (projectRef) {
+      if (isMobile) setOpenMobile(false);
+      const created = await handleNewThread(projectRef);
+      if (created) {
+        useCustomGroupsStore
+          .getState()
+          .bindDraftToGroup(
+            created.draftId,
+            scopedThreadKey(scopeThreadRef(projectRef.environmentId, created.threadId)),
+            groupId,
+          );
+      }
+      return;
+    }
+    if (isMobile) setOpenMobile(false);
+    openCommandPalette({ open: "new-thread-in" });
+  };
 
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
     const scopedProjectRef = resolveScopedNewThreadProjectRef({
@@ -3306,6 +3428,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               searchResultCount={threadSearchResults.length}
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
+              extraActions={<SidebarCustomGroupHeaderButton />}
             />
           </SidebarGroup>
         }
@@ -3397,6 +3520,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           {/* A scope can hide every active thread; say so even when its project still has settled ones. */}
           {!isSearchingThreads &&
           !hasProjectFolders &&
+          !hasCustomGroups &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
             activeThreads.length +
@@ -3485,6 +3609,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
+                        customNavigationParent?: string,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -3505,12 +3630,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             contextDrag={isContextDrag}
                             sortableDisabled={
                               renamingThreadKey === threadKey ||
-                              !draggableThreadKeys.has(threadKey) ||
+                              (!hasCustomGroups && !draggableThreadKeys.has(threadKey)) ||
                               optimisticDrop !== null
                             }
                             thread={thread}
                             variant={rowVariant}
                             navigationParent={
+                              customNavigationParent ??
                               folderRow ??
                               (section === "working" ||
                               section === "snoozed" ||
@@ -3616,12 +3742,39 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       ];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
+                          if (
+                            (item.section === "active" || item.section === "working") &&
+                            customGroupPartition.groupedThreadKeys.has(item.key)
+                          ) {
+                            continue;
+                          }
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
+                          if (hasCustomGroups) {
+                            items.push(
+                              <SidebarCustomGroupsSection
+                                key="sidebar-custom-groups"
+                                groupedSections={customGroupPartition.groupedSections}
+                                ungroupedActiveCount={
+                                  customGroupPartition.ungroupedActiveThreads.length
+                                }
+                                canNewThread={projects.length > 0}
+                                onNewThreadInGroup={handleNewThreadInCustomGroup}
+                                renderThreadRow={(thread, section, customNavigationParent) =>
+                                  renderThreadRow(
+                                    thread,
+                                    section,
+                                    undefined,
+                                    customNavigationParent,
+                                  )
+                                }
+                              />,
+                            );
+                          }
                           for (const folder of projectFolders) {
                             items.push(
                               <SidebarProjectFolderHeader
@@ -3686,6 +3839,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 isDropTarget={dragTargetSection === "active"}
                               />,
                             );
+                            if (hasCustomGroups) {
+                              items.push(
+                                <SidebarCustomGroupsSection
+                                  key="sidebar-custom-groups"
+                                  groupedSections={customGroupPartition.groupedSections}
+                                  ungroupedActiveCount={
+                                    customGroupPartition.ungroupedActiveThreads.length
+                                  }
+                                  canNewThread={projects.length > 0}
+                                  onNewThreadInGroup={handleNewThreadInCustomGroup}
+                                  renderThreadRow={(thread, section, customNavigationParent) =>
+                                    renderThreadRow(
+                                      thread,
+                                      section,
+                                      undefined,
+                                      customNavigationParent,
+                                    )
+                                  }
+                                />,
+                              );
+                            }
                             break;
                           case "working-header":
                             items.push(
@@ -3794,6 +3968,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ) : null}
         </SidebarGroup>
       </SidebarContent>
+      <SidebarCustomGroupsHost />
       <SidebarChromeFooter />
     </SidebarFolderDrop>
   );
