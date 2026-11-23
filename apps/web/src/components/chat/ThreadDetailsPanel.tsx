@@ -47,6 +47,8 @@ import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_LABEL_CLASS,
 } from "./threadDetailsPanelStyles";
+import { ThreadHudCard } from "../custom/ThreadHudCard";
+import type { ThreadHudData } from "../custom/ThreadHudCard.logic";
 import { Menu, MenuPopup } from "../ui/menu";
 
 interface ThreadDetailsPanelProps extends Pick<
@@ -95,6 +97,7 @@ interface ThreadDetailsPanelProps extends Pick<
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
   usage: ThreadDetailsUsageInput;
+  hud?: ThreadHudData;
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
@@ -163,6 +166,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       contentKey={THREAD_DETAILS_ITEMS.filter((item) => visible[item.id])
         .map((item) => item.id)
         .join(",")}
+      secondaryCard={props.hud ? <ThreadHudCard hud={props.hud} usage={props.usage} /> : undefined}
       onContextMenu={(event) => {
         // Popups the card opens bubble here through React; they, fields, links, and selected text
         // keep their own menus.
