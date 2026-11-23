@@ -1,5 +1,5 @@
 import { useGT } from "gt-react";
-import { PlayIcon, WrapTextIcon, CheckIcon, CopyIcon } from "lucide-react";
+import { PlayIcon, WrapTextIcon, CheckIcon, CopyIcon, Maximize2Icon } from "lucide-react";
 import { toHtml } from "hast-util-to-html";
 import React, { use, useEffect, useState, type ReactNode } from "react";
 
@@ -27,6 +27,7 @@ import {
 } from "./MarkdownCodeBlock.logic";
 import { reportMarkdownActionFailure } from "./markdownActionFailure";
 import { PierreEntryIcon } from "./PierreEntryIcon";
+import { ExpandedCodeBlockDialog } from "../custom/ExpandedCodeBlockDialog";
 
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
 const MAX_HIGHLIGHT_CACHE_MEMORY_BYTES = 50 * 1024 * 1024;
@@ -167,10 +168,12 @@ export function MarkdownCodeBlock({
   });
   const defaultWrapped = useClientSettings((settings) => settings.wordWrap);
   const [wrapOverride, setWrapOverride] = useState<boolean | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const wrapped = wrapOverride ?? defaultWrapped;
   const wrapLabel = wrapped ? gt("Disable line wrap") : gt("Wrap lines");
   const copyLabel = copied ? gt("Copied") : gt("Copy code");
   const command = code.trim();
+  const canExpand = !diagram && command.length > 0;
   const canRun =
     onRunShellCommand !== undefined &&
     !isStreaming &&
@@ -214,58 +217,85 @@ export function MarkdownCodeBlock({
   }
 
   return (
-    <MarkdownCodeBlockFrame
-      language={language}
-      fenceTitle={fenceTitle}
-      theme={theme}
-      wrapped={wrapped}
-      headerProps={THREAD_FIND_IGNORE_PROPS}
-      actions={
-        <span
-          className="flex items-center gap-0.5"
-          role="toolbar"
-          aria-label={gt("Code block actions")}
-        >
-          {canWrap ? (
-            <SharedTooltipTrigger
-              label={wrapLabel}
-              render={
-                <Button
-                  type="button"
-                  variant={wrapped ? "secondary" : "ghost-muted"}
-                  size="icon-xs"
-                  aria-pressed={wrapped}
-                  onClick={() => setWrapOverride(!wrapped)}
-                  aria-label={wrapLabel}
-                />
-              }
-            >
-              <WrapTextIcon className="size-3" />
-            </SharedTooltipTrigger>
-          ) : null}
-          {canRun ? (
-            <SharedTooltipTrigger
-              label={gt("Run in terminal")}
-              render={
-                <Button
-                  type="button"
-                  variant="ghost-muted"
-                  size="icon-xs"
-                  onClick={() => onRunShellCommand(command)}
-                  aria-label={gt("Run in terminal")}
-                />
-              }
-            >
-              <PlayIcon className="size-3" />
-            </SharedTooltipTrigger>
-          ) : null}
-          {viewToggle}
-          {copyButton}
-        </span>
-      }
-    >
-      {children}
-    </MarkdownCodeBlockFrame>
+    <>
+      <MarkdownCodeBlockFrame
+        language={language}
+        fenceTitle={fenceTitle}
+        theme={theme}
+        wrapped={wrapped}
+        headerProps={THREAD_FIND_IGNORE_PROPS}
+        actions={
+          <span
+            className="flex items-center gap-0.5"
+            role="toolbar"
+            aria-label={gt("Code block actions")}
+          >
+            {canWrap ? (
+              <SharedTooltipTrigger
+                label={wrapLabel}
+                render={
+                  <Button
+                    type="button"
+                    variant={wrapped ? "secondary" : "ghost-muted"}
+                    size="icon-xs"
+                    aria-pressed={wrapped}
+                    onClick={() => setWrapOverride(!wrapped)}
+                    aria-label={wrapLabel}
+                  />
+                }
+              >
+                <WrapTextIcon className="size-3" />
+              </SharedTooltipTrigger>
+            ) : null}
+            {canRun ? (
+              <SharedTooltipTrigger
+                label={gt("Run in terminal")}
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost-muted"
+                    size="icon-xs"
+                    onClick={() => onRunShellCommand(command)}
+                    aria-label={gt("Run in terminal")}
+                  />
+                }
+              >
+                <PlayIcon className="size-3" />
+              </SharedTooltipTrigger>
+            ) : null}
+            {viewToggle}
+            {canExpand ? (
+              <SharedTooltipTrigger
+                label={gt("Expand code block")}
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost-muted"
+                    size="icon-xs"
+                    onClick={() => setExpanded(true)}
+                    aria-label={gt("Expand code block")}
+                  />
+                }
+              >
+                <Maximize2Icon className="size-3" />
+              </SharedTooltipTrigger>
+            ) : null}
+            {copyButton}
+          </span>
+        }
+      >
+        {children}
+      </MarkdownCodeBlockFrame>
+      {expanded && canExpand ? (
+        <ExpandedCodeBlockDialog
+          code={code}
+          language={language}
+          fenceTitle={fenceTitle}
+          theme={theme}
+          onClose={() => setExpanded(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
