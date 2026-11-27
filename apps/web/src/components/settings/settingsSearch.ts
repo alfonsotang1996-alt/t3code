@@ -772,6 +772,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("notification toast popup completion input approval failure")],
   },
   {
+    id: "telegram-notifications",
+    title: msg("Telegram notifications"),
+    to: "/settings/general",
+    searchTerms: [msg("telegram bot token chat id mobile push alert privacy")],
+  },
+  {
     id: "language",
     title: msg("Language"),
     to: "/settings/general",
