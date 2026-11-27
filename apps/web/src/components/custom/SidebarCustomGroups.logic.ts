@@ -301,6 +301,7 @@ const COLOR_LABEL: Record<CustomGroupColor, string> = {
 
 type CustomGroupHeaderMenuActionId =
   | "new-thread"
+  | "settle-all"
   | "rename"
   | "color"
   | `color:${CustomGroupColor}`
@@ -316,6 +317,8 @@ export function buildCustomGroupHeaderMenuItems(
     readonly canMoveUp: boolean;
     readonly canMoveDown: boolean;
     readonly canNewThread: boolean;
+    readonly settleableCount: number;
+    readonly canSettle: boolean;
   },
   resolve: MessageResolver = m,
 ): readonly ContextMenuItem<CustomGroupHeaderMenuActionId>[] {
@@ -326,6 +329,16 @@ export function buildCustomGroupHeaderMenuItems(
       icon: "message-square-plus",
       disabled: !input.canNewThread,
     },
+    ...(input.settleableCount > 0
+      ? [
+          {
+            id: "settle-all" as const,
+            label: resolve(msg("Settle all ({count})", { count: input.settleableCount })),
+            icon: "check" as const,
+            disabled: !input.canSettle,
+          },
+        ]
+      : []),
     {
       id: "rename",
       label: resolve(msg("Rename group")),

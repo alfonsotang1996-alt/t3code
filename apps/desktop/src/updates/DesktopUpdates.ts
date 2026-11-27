@@ -659,10 +659,24 @@ export const make = Effect.gen(function* () {
         );
   });
 
+  // Fork policy: keep checking for upstream releases so the user is notified,
+  // but never download or overwrite this fork build in-app.
+  const FORK_MANUAL_UPDATE_MESSAGE =
+    "Fork build: in-app updates are disabled. Sync upstream and rebuild via the sync-fork skill (or FORK.md).";
+  const isForkManualUpdateOnly = () =>
+    process.env.VITEST !== "true" && process.env.T3CODE_ALLOW_FORK_IN_APP_UPDATE !== "1";
+
   // Install refreshes before downloading, and a second check could pick a stale, older release.
   const downloadAvailableUpdate = Effect.fn("desktop.updates.downloadAvailableUpdate")(function* (
     refresh: boolean,
   ) {
+    if (isForkManualUpdateOnly()) {
+      yield* updateState((current) =>
+        reduceDesktopUpdateStateOnDownloadFailure(current, FORK_MANUAL_UPDATE_MESSAGE),
+      );
+      yield* logUpdaterWarning("Blocked in-app update download on fork build.");
+      return { accepted: true, completed: false };
+    }
     const admission = yield* Effect.scoped(
       admitAfterCheck(
         Effect.gen(function* () {
@@ -900,6 +914,10 @@ export const make = Effect.gen(function* () {
   const installDownloadedUpdate = (expectedVersion?: string) =>
     Effect.scoped(
       Effect.gen(function* () {
+        if (isForkManualUpdateOnly()) {
+          yield* logUpdaterWarning("Blocked in-app update install on fork build.");
+          return { accepted: false, completed: false, failed: false };
+        }
         const admission = yield* admitAfterCheck(
           Effect.gen(function* () {
             const state = yield* Ref.get(updateStateRef);

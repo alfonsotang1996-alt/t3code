@@ -1767,6 +1767,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
     })();
   };
+  const unsettleThreads = (threadRefs: readonly ScopedThreadRef[]) => {
+    for (const threadRef of threadRefs) {
+      attemptUnsettle(threadRef);
+    }
+  };
   const attemptUnsnooze = (threadRef: ScopedThreadRef) => {
     void (async () => {
       const result = await unsnoozeThread(threadRef);
@@ -3788,7 +3793,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 customGroupPartition.ungroupedActiveThreads.length
                               }
                               canNewThread={projects.length > 0}
+                              canSettleThreads={(threads) => canOperateThreads(threads, true)}
                               onNewThreadInGroup={handleNewThreadInCustomGroup}
+                              onSettleThreads={settleThreads}
+                              onUnsettleThreads={unsettleThreads}
                               renderThreadRow={(thread, section, customNavigationParent) =>
                                 renderThreadRow(thread, section, undefined, customNavigationParent)
                               }
@@ -3868,7 +3876,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   customGroupPartition.ungroupedActiveThreads.length
                                 }
                                 canNewThread={projects.length > 0}
+                                canSettleThreads={(threads) => canOperateThreads(threads, true)}
                                 onNewThreadInGroup={handleNewThreadInCustomGroup}
+                                onSettleThreads={settleThreads}
+                                onUnsettleThreads={unsettleThreads}
                                 renderThreadRow={(thread, section, customNavigationParent) =>
                                   renderThreadRow(
                                     thread,

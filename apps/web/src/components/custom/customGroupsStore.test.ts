@@ -360,7 +360,10 @@ describe("SidebarCustomGroups.logic", () => {
       canMoveUp: false,
       canMoveDown: true,
       canNewThread: true,
+      settleableCount: 2,
+      canSettle: true,
     });
+    expect(headerMenu.find((item) => item.id === "settle-all")).toBeDefined();
     const colorItem = headerMenu.find((item) => item.id === "color");
     expect(colorItem?.children).toHaveLength(CUSTOM_GROUP_COLORS.length);
     expect(customGroupRowId("g1")).toBe("custom-group:g1");

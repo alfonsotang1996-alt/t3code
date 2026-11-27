@@ -40,9 +40,10 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
-const SHARED_THREADS: readonly [FakeThread, FakeThread] = [
+const SHARED_THREADS: readonly [FakeThread, FakeThread, FakeThread] = [
   threadWithHistory("grp-thread-a", 1),
   threadWithHistory("grp-thread-b", 1),
+  threadWithHistory("grp-thread-c", 1),
 ];
 
 function resetCustomGroups() {
@@ -80,10 +81,13 @@ describe("Sidebar custom groups", () => {
   it("creates a group from the header button, persists to localStorage, and survives remount", async () => {
     using _groups = customGroupsScope();
     const [first, second] = SHARED_THREADS;
-    using _env = installFakeEnvironment([first, second]);
+    using _env = installFakeEnvironment(SHARED_THREADS);
 
     {
       await using _app = await mountSidebarApp([first, second]);
+      await expect
+        .element(page.getByTestId("sidebar-row-card").filter({ hasText: second.title }))
+        .toBeVisible();
       await expect.element(page.getByTestId("sidebar-new-custom-group-button")).toBeVisible();
       await userEvent.click(page.getByTestId("sidebar-new-custom-group-button"));
 
@@ -113,11 +117,14 @@ describe("Sidebar custom groups", () => {
   it("assigns and removes threads via context menu and preserves collapse state across remount", async () => {
     using _groups = customGroupsScope();
     const [first, second] = SHARED_THREADS;
-    using _env = installFakeEnvironment([first, second]);
+    using _env = installFakeEnvironment(SHARED_THREADS);
     const group = useCustomGroupsStore.getState().createGroup("Backend", { color: "green" })!;
 
     {
       await using _app = await mountSidebarApp([first, second]);
+      await expect
+        .element(page.getByTestId("sidebar-row-card").filter({ hasText: second.title }))
+        .toBeVisible();
       const threadRow = page.getByTestId("sidebar-row-card").filter({ hasText: second.title });
       await expect.element(threadRow).toBeVisible();
 
@@ -197,13 +204,16 @@ describe("Sidebar custom groups", () => {
   it("supports inline rename via double-click and delete with undo preserving threads", async () => {
     using _groups = customGroupsScope();
     const [first, second] = SHARED_THREADS;
-    using _env = installFakeEnvironment([first, second]);
+    using _env = installFakeEnvironment(SHARED_THREADS);
     const secondKey = scopedThreadKey(scopeThreadRef(ENVIRONMENT_ID, second.id));
     const group = useCustomGroupsStore.getState().createGroup("Temp Name", {
       assignThreadKeys: [secondKey],
     })!;
 
     await using _app = await mountSidebarApp([first, second]);
+    await expect
+      .element(page.getByTestId("sidebar-row-card").filter({ hasText: second.title }))
+      .toBeVisible();
     const toggleBtn = page
       .getByTestId("sidebar-custom-group-toggle")
       .filter({ hasText: "Temp Name" });
@@ -246,6 +256,10 @@ describe("Sidebar custom groups", () => {
     await expect.element(deleteItem).toBeVisible();
     await userEvent.click(deleteItem);
 
+    const keepThreadsBtn = page.getByTestId("delete-custom-group-keep-threads");
+    await expect.element(keepThreadsBtn).toBeVisible();
+    await userEvent.click(keepThreadsBtn);
+
     await expect
       .element(page.getByTestId("sidebar-custom-group").filter({ hasText: "Renamed Group" }))
       .not.toBeInTheDocument();
@@ -263,13 +277,98 @@ describe("Sidebar custom groups", () => {
     expect(useCustomGroupsStore.getState().getGroupIdForThread(secondKey)).toBe(group.id);
   });
 
+  it("supports settling all threads in a group and delete-and-settle for non-empty groups", async () => {
+    using _groups = customGroupsScope();
+    const [first, second, third] = SHARED_THREADS;
+    using _env = installFakeEnvironment([first, second, third]);
+    const thirdKey = scopedThreadKey(scopeThreadRef(ENVIRONMENT_ID, third.id));
+    useCustomGroupsStore.getState().createGroup("Sprint", {
+      assignThreadKeys: [thirdKey],
+    });
+    useCustomGroupsStore.getState().createGroup("Empty Group");
+
+    await using _app = await mountSidebarApp([first, second, third]);
+    await expect
+      .element(page.getByTestId("sidebar-row-card").filter({ hasText: third.title }))
+      .toBeVisible();
+
+    // Deleting an empty group should not open the confirmation dialog.
+    const emptyToggle = page
+      .getByTestId("sidebar-custom-group-toggle")
+      .filter({ hasText: "Empty Group" });
+    await expect.element(emptyToggle).toBeVisible();
+    const emptyRect = emptyToggle.element().getBoundingClientRect();
+    emptyToggle.element().dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: emptyRect.left + 12,
+        clientY: emptyRect.top + 12,
+      }),
+    );
+    await userEvent.click(page.getByRole("menuitem", { name: "Delete group" }));
+    await expect
+      .element(page.getByRole("menuitem", { name: "Delete group" }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByTestId("sidebar-custom-group").filter({ hasText: "Empty Group" }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByTestId("delete-custom-group-and-settle"))
+      .not.toBeInTheDocument();
+
+    // Deleting a non-empty group with "Delete & settle" deletes the group and settles its threads.
+    const sprintToggle = page
+      .getByTestId("sidebar-custom-group-toggle")
+      .filter({ hasText: "Sprint" });
+    await expect.element(sprintToggle).toBeVisible();
+    const sprintRect = sprintToggle.element().getBoundingClientRect();
+    sprintToggle.element().dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: sprintRect.left + 12,
+        clientY: sprintRect.top + 12,
+      }),
+    );
+
+    await expect.element(page.getByRole("menuitem", { name: "Settle all (1)" })).toBeVisible();
+    await userEvent.click(page.getByRole("menuitem", { name: "Delete group" }));
+
+    const deleteAndSettleBtn = page.getByTestId("delete-custom-group-and-settle");
+    await expect.element(deleteAndSettleBtn).toBeVisible();
+    await userEvent.click(deleteAndSettleBtn);
+
+    await expect
+      .element(page.getByTestId("sidebar-custom-group").filter({ hasText: "Sprint" }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByTestId("sidebar-row-card").filter({ hasText: third.title }))
+      .not.toBeInTheDocument();
+
+    const sprintToast = page.getByRole("dialog").filter({ hasText: 'Deleted group "Sprint"' });
+    const undoButton = sprintToast.getByRole("button", { name: "Undo" });
+    await expect.element(undoButton).toBeVisible();
+    await userEvent.click(undoButton);
+
+    await expect
+      .element(page.getByTestId("sidebar-custom-group").filter({ hasText: "Sprint" }))
+      .toBeVisible();
+    await expect
+      .element(page.getByTestId("sidebar-row-card").filter({ hasText: third.title }))
+      .toBeVisible();
+  });
+
   it("creates a new draft thread inside a group and reconciles membership on promotion", async () => {
     using _groups = customGroupsScope();
     const [first, second] = SHARED_THREADS;
-    using _env = installFakeEnvironment([first, second]);
+    using _env = installFakeEnvironment(SHARED_THREADS);
     const group = useCustomGroupsStore.getState().createGroup("Inbox Zero")!;
 
     await using _app = await mountSidebarApp([first, second]);
+    await expect
+      .element(page.getByTestId("sidebar-row-card").filter({ hasText: second.title }))
+      .toBeVisible();
     const newThreadBtn = page.getByTestId("sidebar-custom-group-new-thread");
     await expect.element(newThreadBtn).toBeInTheDocument();
     await act(async () => {
@@ -309,7 +408,7 @@ describe("Sidebar custom groups", () => {
   it("assigns and unassigns threads via pointer drag-and-drop", async () => {
     using _groups = customGroupsScope();
     const [first, second] = SHARED_THREADS;
-    using _env = installFakeEnvironment([first, second]);
+    using _env = installFakeEnvironment(SHARED_THREADS);
     const group = useCustomGroupsStore.getState().createGroup("Drag Target")!;
 
     const realPerfNow = performance.now.bind(performance);
@@ -319,6 +418,9 @@ describe("Sidebar custom groups", () => {
       .mockImplementation(() => realPerfNow() + perfOffsetMs);
 
     await using _app = await mountSidebarApp([first, second]);
+    await expect
+      .element(page.getByTestId("sidebar-row-card").filter({ hasText: second.title }))
+      .toBeVisible();
     const secondKey = scopedThreadKey(scopeThreadRef(ENVIRONMENT_ID, second.id));
     const secondRow = page.getByTestId("sidebar-row-card").filter({ hasText: second.title });
     const groupHeader = page.getByTestId("sidebar-custom-group").filter({ hasText: "Drag Target" });

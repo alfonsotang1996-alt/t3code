@@ -1,6 +1,6 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { ContextMenuSource } from "@t3tools/contracts";
+import type { ContextMenuSource, ScopedThreadRef } from "@t3tools/contracts";
 import { msg, useGT, useMessages } from "gt-react";
 import { ChevronDownIcon, FolderIcon, FolderPlusIcon, PlusIcon } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -19,6 +19,7 @@ import { SidebarHeaderIconButton } from "../sidebar/SidebarThreadHeader";
 import { Button } from "../ui/button";
 import {
   Dialog,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogPanel,
@@ -237,8 +238,20 @@ interface CreateGroupModalState {
   assignThreadKeys: readonly string[];
 }
 
+interface DeleteGroupModalState {
+  id: number;
+  groupId: string;
+  groupName: string;
+  settleableThreadKeys: readonly string[];
+  settleableThreadRefs: readonly ScopedThreadRef[];
+  canSettle: boolean;
+  onSettleThreads: (threadKeys: readonly string[]) => void;
+  onUnsettleThreads: (threadRefs: readonly ScopedThreadRef[]) => void;
+}
+
 let nextModalRequestId = 1;
 let createGroupModalState: CreateGroupModalState | null = null;
+let deleteGroupModalState: DeleteGroupModalState | null = null;
 const modalListeners = new Set<() => void>();
 
 function emitModalState() {
@@ -258,6 +271,10 @@ function getModalStateSnapshot() {
   return createGroupModalState;
 }
 
+function getDeleteModalStateSnapshot() {
+  return deleteGroupModalState;
+}
+
 function requestCreateCustomGroup(options?: {
   initialName?: string;
   assignThreadKeys?: readonly string[];
@@ -273,6 +290,28 @@ function requestCreateCustomGroup(options?: {
 function closeCreateCustomGroupModal() {
   if (createGroupModalState === null) return;
   createGroupModalState = null;
+  emitModalState();
+}
+
+function requestDeleteCustomGroup(input: {
+  groupId: string;
+  groupName: string;
+  settleableThreadKeys: readonly string[];
+  settleableThreadRefs: readonly ScopedThreadRef[];
+  canSettle: boolean;
+  onSettleThreads: (threadKeys: readonly string[]) => void;
+  onUnsettleThreads: (threadRefs: readonly ScopedThreadRef[]) => void;
+}) {
+  deleteGroupModalState = {
+    id: nextModalRequestId++,
+    ...input,
+  };
+  emitModalState();
+}
+
+function closeDeleteCustomGroupModal() {
+  if (deleteGroupModalState === null) return;
+  deleteGroupModalState = null;
   emitModalState();
 }
 
@@ -435,6 +474,111 @@ function CreateCustomGroupDialog() {
   );
 }
 
+function deleteGroupWithUndoToast(groupId: string, gt: ReturnType<typeof useGT>) {
+  const snapshot = useCustomGroupsStore.getState().deleteGroup(groupId);
+  if (!snapshot) return;
+  toastManager.add(
+    stackedThreadToast({
+      type: "info",
+      title: gt('Deleted group "{name}"', { name: snapshot.group.name }),
+      description: gt("Threads remain available in the sidebar."),
+      actionProps: {
+        children: gt("Undo"),
+        onClick: () => {
+          useCustomGroupsStore.getState().restoreDeletedGroup(snapshot);
+        },
+      },
+    }),
+  );
+}
+
+function DeleteCustomGroupDialog() {
+  const gt = useGT();
+  const request = useSyncExternalStore(
+    subscribeModalState,
+    getDeleteModalStateSnapshot,
+    getDeleteModalStateSnapshot,
+  );
+
+  if (request === null) {
+    return null;
+  }
+
+  const count = request.settleableThreadKeys.length;
+
+  const handleKeepThreads = () => {
+    deleteGroupWithUndoToast(request.groupId, gt);
+    closeDeleteCustomGroupModal();
+  };
+
+  const handleDeleteAndSettle = () => {
+    const snapshot = useCustomGroupsStore.getState().deleteGroup(request.groupId);
+    if (snapshot) {
+      const settledKeys = request.settleableThreadKeys;
+      const settledRefs = request.settleableThreadRefs;
+      request.onSettleThreads(settledKeys);
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: gt('Deleted group "{name}"', { name: snapshot.group.name }),
+          description: gt("Settled {count} threads in this group.", { count }),
+          actionProps: {
+            children: gt("Undo"),
+            onClick: () => {
+              useCustomGroupsStore.getState().restoreDeletedGroup(snapshot);
+              request.onUnsettleThreads(settledRefs);
+            },
+          },
+        }),
+      );
+    }
+    closeDeleteCustomGroupModal();
+  };
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) closeDeleteCustomGroupModal();
+      }}
+    >
+      <DialogPopup>
+        <DialogHeader>
+          <DialogTitle>{gt('Delete group "{name}"?', { name: request.groupName })}</DialogTitle>
+          <DialogDescription>
+            {gt(
+              "This group has {count} active threads. You can settle them together or keep them in the sidebar.",
+              { count },
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={closeDeleteCustomGroupModal}>
+            {gt("Cancel")}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            data-testid="delete-custom-group-keep-threads"
+            onClick={handleKeepThreads}
+          >
+            {gt("Keep threads")}
+          </Button>
+          <Button
+            type="button"
+            variant="default"
+            data-testid="delete-custom-group-and-settle"
+            disabled={!request.canSettle}
+            onClick={handleDeleteAndSettle}
+          >
+            {gt("Delete & settle ({count})", { count })}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 export function SidebarCustomGroupHeaderButton() {
   const gt = useGT();
   return (
@@ -451,22 +595,28 @@ export function SidebarCustomGroupHeaderButton() {
 
 interface SidebarCustomGroupHeaderProps {
   group: CustomSidebarGroup;
-  totalCount: number;
+  threads: readonly EnvironmentThreadShell[];
   hiddenThreads: readonly EnvironmentThreadShell[];
   canMoveUp: boolean;
   canMoveDown: boolean;
   canNewThread: boolean;
+  canSettleThreads: (threads: readonly EnvironmentThreadShell[]) => boolean;
   onNewThreadInGroup: (groupId: string) => void | Promise<void>;
+  onSettleThreads: (threadKeys: readonly string[]) => void;
+  onUnsettleThreads: (threadRefs: readonly ScopedThreadRef[]) => void;
 }
 
 function SidebarCustomGroupHeader({
   group,
-  totalCount,
+  threads,
   hiddenThreads,
   canMoveUp,
   canMoveDown,
   canNewThread,
+  canSettleThreads,
   onNewThreadInGroup,
+  onSettleThreads,
+  onUnsettleThreads,
 }: SidebarCustomGroupHeaderProps) {
   const gt = useGT();
   const m = useMessages();
@@ -476,6 +626,13 @@ function SidebarCustomGroupHeader({
   const [renameValue, setRenameValue] = useState(group.name);
   const settledRef = useRef(false);
 
+  const totalCount = threads.length;
+  const settleableThreads = threads.filter((thread) => thread.settledOverride !== "settled");
+  const settleableThreadRefs = settleableThreads.map((thread) =>
+    scopeThreadRef(thread.environmentId, thread.id),
+  );
+  const settleableThreadKeys = settleableThreadRefs.map((ref) => scopedThreadKey(ref));
+  const canSettle = settleableThreads.length > 0 && canSettleThreads(settleableThreads);
   const isDropHighlighted = dragState.active && dragState.targetId === group.id;
   const rowId = customGroupRowId(group.id);
   const dot = group.collapsed
@@ -515,22 +672,20 @@ function SidebarCustomGroupHeader({
     setIsRenaming(false);
   };
 
-  const deleteWithUndo = () => {
-    const snapshot = useCustomGroupsStore.getState().deleteGroup(group.id);
-    if (!snapshot) return;
-    toastManager.add(
-      stackedThreadToast({
-        type: "info",
-        title: gt('Deleted group "{name}"', { name: snapshot.group.name }),
-        description: gt("Threads remain available in the sidebar."),
-        actionProps: {
-          children: gt("Undo"),
-          onClick: () => {
-            useCustomGroupsStore.getState().restoreDeletedGroup(snapshot);
-          },
-        },
-      }),
-    );
+  const handleDeleteGroup = () => {
+    if (settleableThreadKeys.length === 0) {
+      deleteGroupWithUndoToast(group.id, gt);
+      return;
+    }
+    requestDeleteCustomGroup({
+      groupId: group.id,
+      groupName: group.name,
+      settleableThreadKeys,
+      settleableThreadRefs,
+      canSettle,
+      onSettleThreads,
+      onUnsettleThreads,
+    });
   };
 
   const openGroupContextMenu = async (
@@ -546,6 +701,8 @@ function SidebarCustomGroupHeader({
         canMoveUp,
         canMoveDown,
         canNewThread,
+        settleableCount: settleableThreadKeys.length,
+        canSettle,
       },
       m,
     );
@@ -555,6 +712,11 @@ function SidebarCustomGroupHeader({
     switch (clicked) {
       case "new-thread":
         void onNewThreadInGroup(group.id);
+        break;
+      case "settle-all":
+        if (canSettle) {
+          onSettleThreads(settleableThreadKeys);
+        }
         break;
       case "rename":
         startRenaming();
@@ -569,7 +731,7 @@ function SidebarCustomGroupHeader({
         moveGroup(group.id, "down");
         break;
       case "delete":
-        deleteWithUndo();
+        handleDeleteGroup();
         break;
       default:
         if (clicked.startsWith("color:")) {
@@ -695,7 +857,10 @@ interface SidebarCustomGroupsSectionProps {
   groupedSections: readonly PartitionedCustomGroup<EnvironmentThreadShell>[];
   ungroupedActiveCount: number;
   canNewThread: boolean;
+  canSettleThreads: (threads: readonly EnvironmentThreadShell[]) => boolean;
   onNewThreadInGroup: (groupId: string) => void | Promise<void>;
+  onSettleThreads: (threadKeys: readonly string[]) => void;
+  onUnsettleThreads: (threadRefs: readonly ScopedThreadRef[]) => void;
   renderThreadRow: (
     thread: EnvironmentThreadShell,
     section: SidebarSection,
@@ -707,7 +872,10 @@ export function SidebarCustomGroupsSection({
   groupedSections,
   ungroupedActiveCount,
   canNewThread,
+  canSettleThreads,
   onNewThreadInGroup,
+  onSettleThreads,
+  onUnsettleThreads,
   renderThreadRow,
 }: SidebarCustomGroupsSectionProps) {
   const gt = useGT();
@@ -730,12 +898,15 @@ export function SidebarCustomGroupsSection({
           <Fragment key={group.id}>
             <SidebarCustomGroupHeader
               group={group}
-              totalCount={threads.length}
+              threads={threads}
               hiddenThreads={hiddenThreads}
               canMoveUp={groupIndex > 0}
               canMoveDown={groupIndex < groupedSections.length - 1}
               canNewThread={canNewThread}
+              canSettleThreads={canSettleThreads}
               onNewThreadInGroup={onNewThreadInGroup}
+              onSettleThreads={onSettleThreads}
+              onUnsettleThreads={onUnsettleThreads}
             />
             {!group.collapsed && visibleThreads.length > 0
               ? visibleThreads.map((thread) => (
@@ -803,10 +974,16 @@ export function SidebarCustomGroupsHost() {
     return () => {
       endCustomGroupDrag();
       closeCreateCustomGroupModal();
+      closeDeleteCustomGroupModal();
     };
   }, []);
 
-  return <CreateCustomGroupDialog />;
+  return (
+    <>
+      <CreateCustomGroupDialog />
+      <DeleteCustomGroupDialog />
+    </>
+  );
 }
 
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
